@@ -1,27 +1,56 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
-namespace GraphDrawing
+namespace GraphDrawingOptimized
 {
-    public partial class Form1 : Form
+    static class Program
     {
-        // Масив значень
-        private double[] xValues;
-        private double[] yValues;
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new Form1());
+        }
+    }
+
+    public class Form1 : Form
+    {
+        // Поля даних
+        private double[] _xValues;
+        private double[] _yValues;
+
+        // Тип відображення
+        private bool _drawLineGraph = true; // true - лінія, false - точки
 
         public Form1()
         {
-            InitializeComponent();
+            this.Text = "Графік y = (x^3 - 2)/(3 ln x)";
+            this.Size = new Size(800, 600);
 
-            // Заповнення даних
+            // Включаємо DoubleBuffer для зменшення мерехтіння
+            this.SetStyle(ControlStyles.UserPaint |
+                          ControlStyles.AllPaintingInWmPaint |
+                          ControlStyles.OptimizedDoubleBuffer, true);
+
             GenerateData();
 
-            // Підписка на подію перерисовки
-            this.Paint += Form1_Paint;
-
-            // Перерисовка при зміні розміру
-            this.Resize += Form1_Resize;
+            // UI: перемикач лінія/точки
+            var checkBox = new CheckBox
+            {
+                Text = "Line Graph",
+                Checked = true,
+                Location = new Point(10, 10),
+                AutoSize = true
+            };
+            checkBox.CheckedChanged += (s, e) =>
+            {
+                _drawLineGraph = checkBox.Checked;
+                this.Invalidate();
+            };
+            this.Controls.Add(checkBox);
         }
 
         private void GenerateData()
@@ -31,80 +60,87 @@ namespace GraphDrawing
             double dx = 2.2;
 
             int n = (int)Math.Ceiling((endX - startX) / dx) + 1;
-            xValues = new double[n];
-            yValues = new double[n];
+            _xValues = new double[n];
+            _yValues = new double[n];
 
             for (int i = 0; i < n; i++)
             {
                 double x = startX + i * dx;
-                xValues[i] = x;
-                yValues[i] = (x * x * x - 2) / (3 * Math.Log(x)); // y = (x^3 - 2)/(3ln(x))
+                _xValues[i] = x;
+                _yValues[i] = (x * x * x - 2) / (3 * Math.Log(x));
             }
         }
 
-        private void Form1_Paint(object sender, PaintEventArgs e)
+        protected override void OnPaint(PaintEventArgs e)
         {
-            Graphics g = e.Graphics;
+            base.OnPaint(e);
+            DrawGraph(e.Graphics);
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            this.Invalidate(); // Перемалювати графік при зміні розміру
+        }
+
+        private void DrawGraph(Graphics g)
+        {
             g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Color.White);
 
             int w = this.ClientSize.Width;
             int h = this.ClientSize.Height;
+            int margin = 50;
 
-            g.Clear(Color.White);
+            if (_xValues.Length == 0) return;
 
-            if (xValues.Length == 0) return;
+            // Обчислюємо мін/макс
+            double xMin = _xValues.Min();
+            double xMax = _xValues.Max();
+            double yMin = _yValues.Min();
+            double yMax = _yValues.Max();
 
-            // Знаходимо мін/макс для масштабування
-            double xMin = xValues[0];
-            double xMax = xValues[xValues.Length - 1];
-            double yMin = double.MaxValue;
-            double yMax = double.MinValue;
+            // Перевірка на ділення на нуль
+            double eps = 1e-6;
+            if (Math.Abs(xMax - xMin) < eps || Math.Abs(yMax - yMin) < eps) return;
 
-            foreach (double y in yValues)
-            {
-                if (y < yMin) yMin = y;
-                if (y > yMax) yMax = y;
-            }
-
-            // Поля від країв
-            int margin = 40;
-
-            // Перетворення координат (математичні -> пікселі)
+            // Функції перетворення в пікселі
             Func<double, int> XPixel = x => (int)((x - xMin) / (xMax - xMin) * (w - 2 * margin) + margin);
             Func<double, int> YPixel = y => (int)((yMax - y) / (yMax - yMin) * (h - 2 * margin) + margin);
 
-            // Малюємо осі
-            Pen axisPen = new Pen(Color.Black, 1);
-            g.DrawLine(axisPen, margin, h - margin, w - margin, h - margin); // X
-            g.DrawLine(axisPen, margin, margin, margin, h - margin); // Y
+            DrawAxes(g, w, h, margin);
 
             // Малюємо графік
-            Pen graphPen = new Pen(Color.Red, 2);
-            for (int i = 0; i < xValues.Length - 1; i++)
+            using (var pen = new Pen(Color.Red, 2))
             {
-                g.DrawLine(graphPen, XPixel(xValues[i]), YPixel(yValues[i]), XPixel(xValues[i + 1]), YPixel(yValues[i + 1]));
-            }
-
-            // Малюємо точки
-            Brush pointBrush = Brushes.Blue;
-            foreach (var (x, y) in Zip(xValues, yValues))
-            {
-                int px = XPixel(x);
-                int py = YPixel(y);
-                g.FillEllipse(pointBrush, px - 3, py - 3, 6, 6);
+                if (_drawLineGraph)
+                {
+                    for (int i = 0; i < _xValues.Length - 1; i++)
+                    {
+                        g.DrawLine(pen,
+                            XPixel(_xValues[i]), YPixel(_yValues[i]),
+                            XPixel(_xValues[i + 1]), YPixel(_yValues[i + 1]));
+                    }
+                }
+                else
+                {
+                    foreach (var (x, y) in _xValues.Zip(_yValues, (a, b) => (a, b)))
+                    {
+                        g.FillEllipse(Brushes.Blue, XPixel(x) - 3, YPixel(y) - 3, 6, 6);
+                    }
+                }
             }
         }
 
-        // Допоміжний метод для zip
-        private static System.Collections.Generic.IEnumerable<(T1, T2)> Zip<T1, T2>(T1[] a, T2[] b)
+        private void DrawAxes(Graphics g, int w, int h, int margin)
         {
-            for (int i = 0; i < Math.Min(a.Length, b.Length); i++)
-                yield return (a[i], b[i]);
-        }
-
-        private void Form1_Resize(object sender, EventArgs e)
-        {
-            this.Invalidate(); // Перемалювати при зміні розміру
+            using (var axisPen = new Pen(Color.Black, 1))
+            {
+                // X
+                g.DrawLine(axisPen, margin, h - margin, w - margin, h - margin);
+                // Y
+                g.DrawLine(axisPen, margin, margin, margin, h - margin);
+            }
         }
     }
 }
